@@ -1,0 +1,63 @@
+# 2026/03/05
+# GFDL 초기모델 공부 (namelist 수정 후 비교 그림 그리기)
+# 초기값 delh = 60, 수정값 delh = 80
+<img width="629" height="159" alt="image" src="https://github.com/user-attachments/assets/2d79721d-89dc-4ef8-ae39-be2dfffb1a52" />
+# 코드
+import xarray as xr
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+
+# 1. 두 실험 데이터 불러오기
+# v1: 기존 실험 (delh=60), v2: 새로운 실험 (delh=80)
+path_v1 = '/home/capstone01/GFDL/project/sorim/atmos_average.nc'
+path_v2 = '/home/capstone01/GFDL_sorim_changed/project/sorim/atmos_average.nc'
+
+if not os.path.exists(path_v1) or not os.path.exists(path_v2):
+    print("❌ 에러: 데이터 파일 경로를 확인해주세요.")
+else:
+    ds1 = xr.open_dataset(path_v1, decode_times=False)
+    ds2 = xr.open_dataset(path_v2, decode_times=False)
+
+    # 2. 데이터 가공 (Zonal Mean)
+    t_avg1 = ds1['temp'].mean(dim=['time', 'lon'])
+    t_avg2 = ds2['temp'].mean(dim=['time', 'lon'])
+
+ # --- 공통 온도 범위 설정 (데이터 상황에 따라 200~320 정도로 조절 가능) ---
+    v_min = 200
+    v_max = 320
+
+    # 3. 그림 그리기 (1행 2열 구성)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+
+    # --- 왼쪽 그림: delh = 60 (vmin, vmax 추가) ---
+    im1 = t_avg1.plot.contourf(ax=ax1, x='lat', y='pfull', yincrease=False, 
+                               cmap='RdYlBu_r', levels=25, 
+                               vmin=v_min, vmax=v_max, add_colorbar=True) # <-- 여기!
+    ax1.set_title('Control: delh = 60K', fontsize=14)
+    ax1.set_ylabel('Pressure (hPa)')
+    ax1.set_xlabel('Latitude')
+
+    # --- 오른쪽 그림: delh = 80 (vmin, vmax 추가) ---
+    im2 = t_avg2.plot.contourf(ax=ax2, x='lat', y='pfull', yincrease=False, 
+                               cmap='RdYlBu_r', levels=25, 
+                               vmin=v_min, vmax=v_max, add_colorbar=True) 
+    ax2.set_title('Changed: delh = 80K', fontsize=14)
+    ax2.set_ylabel('') 
+    ax2.set_xlabel('Latitude')
+
+    plt.suptitle('Comparison of Temperature Profile', fontsize=16, y=1.05)
+    plt.tight_layout()
+
+    # 4. 저장 및 출력
+    output_file = 'temp_comparison_2panels.png'
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    print(f"✅ 비교 그림이 '{output_file}'로 저장되었습니다!")
+    plt.show()
+
+    # 5. 수치 확인 (적도 지점의 온도 값 출력)
+    eq_idx = np.abs(ds1.lat).argmin()
+    val1 = t_avg1.isel(lat=eq_idx, pfull=-1).values
+    val2 = t_avg2.isel(lat=eq_idx, pfull=-1).values
+    print(f"📍 적도 지표 온도 -> [60K]: {val1:.2f}K | [80K]: {val2:.2f}K")
+    print(f"📍 차이: {val2 - val1:.2f} K")
