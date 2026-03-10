@@ -1,0 +1,27 @@
+# make가 필요한 이유? cesm src 갯수 수천개.. ppl esm.. 각자 소스코드의 일부분 개발.. 코드들이 섞임.. F가 O로 변함.. 컴파일러가 해줌-:> 협업을 하기 위함 (src 관리 tool)
+# subversion : 고치기 전 이력이 남음 , 터미널창에서 수동으로, version 관리 tool
+# github : subversion에서 SNS 같은 기능 증가 , src 코드 저장소 (오픈코드)
+# 큰 소스코드를 담아서..활용해봤으면 좋겠음
+# 집단 지성
+# Adaptive bias correction **subseasonal** 논문으로 진행
+# 앙상블, clustering 분류, 모델의 예측은 필연적 오차 존재, 1) physics 개선, 2) input (재분석자료) - output을 보고 AI가 모델을 만듦..
+# 모델이 있기 때문에 AI가 존재, 자료동화 자체를 AI가 침범
+# 3) 역학모델의 결과 (bias 존재) - AI를 통해서 잘 수정
+# 기상학의 역사 : 칼레이 (미국 vs 유럽 자료(재분석))
+# 변분동화
+# src 조사 : 제공된 subseasonal forecasting toolkit
+# 우리 모델으로 활용해서 해보기
+# 우리 lab의 work 중에 AI가 reproduce하는 걸 활용
+# storm Frank 논문 활용 , 스톰 코드 AI 분석, 코드로 그림 그리기
+# 분석이 고차원적이지 않고 깔끔함
+# 이걸로 진행
+# 교수님이 주신 주제로 자유롭게 , 자발적으로 , 적극적으로
+
+# 기후분석예 자료 설명
+# 교수님이 AI에게 맡긴 과제
+# 똑같이 하지 않아도 AI potential 알아내기
+# llm을 불러들이면 코딩에서 AI 활용가능
+# Google AI Studio에서 API 키 만들어서 넣기
+# 직접 사이트에 가서 데이터를 구글 드라이브에 다운 (300MB)
+# 셀의 넘버를 확실하게 해서 조직적으로 명령하는 방법찾기
+# AO 지수

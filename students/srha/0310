@@ -1,5 +1,0 @@
-# make가 필요한 이유? cesm src 갯수 수천개.. ppl esm.. 각자 소스코드의 일부분 개발.. 코드들이 섞임.. F가 O로 변함.. 컴파일러가 해줌-:> 협업을 하기 위함 (src 관리 tool)
-# subversion : 고치기 전 이력이 남음 , 터미널창에서 수동으로, version 관리 tool
-# github : subversion에서 SNS 같은 기능 증가 , src 코드 저장소 (오픈코드)
-# 큰 소스코드를 담아서..활용해봤으면 좋겠음
-# 집단 지성
