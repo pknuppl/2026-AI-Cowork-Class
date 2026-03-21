@@ -1,0 +1,376 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+from scipy.linalg import solve
+import warnings
+warnings.filterwarnings('ignore')
+
+# ============================================================
+# 1D Diffusive EBM — Linearized feedback approach
+# 
+# Energy balance: Q(1-α₀) - A - B_eff*T + L*T + F = 0
+# B_eff(φ) = B_planck(φ) - λ_albedo(φ) 
+#   (albedo feedback REDUCES effective damping at ice edge)
+# ============================================================
+
+Lv = 2.5e6; cp_air = 1004.0
+
+N = 91
+x = np.linspace(0, 1, N)  # sin(lat), NH
+lat = np.degrees(np.arcsin(x))
+dx = x[1] - x[0]
+
+# Insolation
+S0 = 1360.0
+P2 = (3*x**2 - 1)/2
+Q = S0/4 * (1 - 0.482*P2)
+
+# Fixed albedo (control climate)
+alpha0 = 0.28 + 0.22 * (1 + np.tanh((lat - 62)/8)) / 2
+
+# OLR parameters
+A_olr = 210.0
+B_mean = 1.9
+
+# Reference T
+T_obs = 27 - 50*x**1.4
+T_obs_K = T_obs + 273.15
+T_mean_K = np.mean(T_obs_K)
+
+# Planck nonlinearity: B ∝ T³
+B_planck = B_mean * (T_obs_K / T_mean_K)**3
+B_uniform = np.full(N, B_mean)
+
+# Albedo feedback (linearized): positive at ~60-80°N
+# Based on Pithan & Mauritsen: albedo feedback ~1-2 W/m²/°C at 70°N
+lambda_albedo = 1.2 * np.exp(-((lat - 70)/12)**2)  # Gaussian centered at 70°N
+
+# C-C functions
+def q_sat(T_C):
+    T_C = np.clip(T_C, -80, 50)
+    return 3.8e-3 * np.exp(17.67*T_C/(T_C+243.5))
+
+def dqsat_dT(T_C):
+    T_C = np.clip(T_C, -80, 50)
+    return q_sat(T_C) * 4302.6 / (T_C+243.5)**2
+
+def moist_factor(T_C):
+    return 1.0 + Lv * dqsat_dT(T_C) / cp_air
+
+D0 = 0.30
+
+def get_D(T, moist=True):
+    if not moist:
+        return np.full(N, D0)
+    mf = moist_factor(T)
+    return D0 * mf / np.mean(mf)
+
+# Heat capacity
+rho_cw = 1025.0 * 3994.0
+h_trop, h_arct = 70.0, 12.0
+h_ml = h_trop - (h_trop - h_arct) * (1+np.tanh((lat-60)/10))/2
+C_vary = rho_cw * h_ml
+C_unif = np.full(N, rho_cw * 50.0)
+
+def build_L(D_field):
+    L = np.zeros((N, N))
+    for i in range(1, N-1):
+        xp = (x[i]+x[i+1])/2
+        xm = (x[i]+x[i-1])/2
+        Dp = (D_field[i]+D_field[i+1])/2
+        Dm = (D_field[i]+D_field[i-1])/2
+        cp_ = Dp*(1-xp**2)/dx**2
+        cm_ = Dm*(1-xm**2)/dx**2
+        L[i, i+1] = cp_
+        L[i, i-1] = cm_
+        L[i, i]   = -(cp_ + cm_)
+    xp0 = (x[0]+x[1])/2
+    Dp0 = (D_field[0]+D_field[1])/2
+    cp0 = Dp0*(1-xp0**2)/dx**2
+    L[0, 1] = cp0
+    L[0, 0] = -cp0
+    L[-1, :] = 0; L[-1, -1] = -0.01; L[-1, -2] = 0.01
+    return L
+
+def solve_eq(B_eff, D_field, F=0.0):
+    L = build_L(D_field)
+    M = np.diag(B_eff) - L
+    rhs = Q*(1-alpha0) - A_olr + F
+    return solve(M, rhs)
+
+def run_transient(B_eff, D_field, C, F, T0, years=80):
+    L = build_L(D_field)
+    dt = 30*86400
+    M_imp = np.diag(C/dt + B_eff) - L
+    T = T0.copy()
+    hist = [T.copy()]
+    for yr in range(years):
+        for _ in range(12):
+            rhs = C/dt*T + Q*(1-alpha0) - A_olr + F
+            T = solve(M_imp, rhs)
+        hist.append(T.copy())
+    return hist
+
+# ============================================================
+# Define configurations
+# ============================================================
+F4x = 7.4
+arctic = lat >= 65
+tropic = lat <= 30
+
+D_moist = get_D(T_obs, moist=True)
+D_dry = get_D(T_obs, moist=False)
+
+# Effective B for different configs
+configs = {
+    'full': {
+        'B': B_planck - lambda_albedo,  # Planck nonlinear + albedo feedback
+        'D': D_moist,
+        'col': '#C62828', 'lbl': 'Full model\n(Planck + albedo fb + moist)'
+    },
+    'no_planck': {
+        'B': B_uniform - lambda_albedo,  # uniform Planck + albedo
+        'D': D_moist,
+        'col': '#1565C0', 'lbl': 'No Planck nonlinearity\n(uniform B + albedo fb + moist)'
+    },
+    'no_albedo': {
+        'B': B_planck,  # Planck only, no albedo feedback
+        'D': D_moist,
+        'col': '#6A1B9A', 'lbl': 'No albedo feedback\n(Planck + moist, no albedo fb)'
+    },
+    'no_moist': {
+        'B': B_planck - lambda_albedo,  # all feedbacks but dry transport
+        'D': D_dry,
+        'col': '#E65100', 'lbl': 'No moisture transport\n(Planck + albedo fb, dry only)'
+    },
+}
+
+print("Equilibrium experiments...")
+eq_results = {}
+for k, c in configs.items():
+    Tc = solve_eq(c['B'], c['D'], F=0.0)
+    Tf = solve_eq(c['B'], c['D'], F=F4x)
+    dT = Tf - Tc
+    aw, gw, tw = np.mean(dT[arctic]), np.mean(dT), np.mean(dT[tropic])
+    aa = aw/gw
+    eq_results[k] = {'dT': dT, 'arctic': aw, 'global': gw, 'tropic': tw, 'aa': aa}
+    print(f"  {k:12s}: Arctic={aw:.2f}°C  Global={gw:.2f}°C  AA={aa:.2f}")
+
+# Transient (heat capacity)
+print("\nTransient experiments...")
+B_full = B_planck - lambda_albedo
+Tc_full = solve_eq(B_full, D_moist, F=0.0)
+
+hist_vary = run_transient(B_full, D_moist, C_vary, F4x, Tc_full, years=80)
+hist_unif = run_transient(B_full, D_moist, C_unif, F4x, Tc_full, years=80)
+dT_vary = [h - Tc_full for h in hist_vary]
+dT_unif = [h - Tc_full for h in hist_unif]
+
+# Metrics
+full_aa = eq_results['full']['aa']
+c_planck = full_aa - eq_results['no_planck']['aa']
+c_albedo = full_aa - eq_results['no_albedo']['aa']
+c_moist  = full_aa - eq_results['no_moist']['aa']
+resid = (full_aa - 1.0) - c_planck - c_albedo - c_moist
+
+aa5_v = np.mean(dT_vary[5][arctic])/np.mean(dT_vary[5])
+aa5_u = np.mean(dT_unif[5][arctic])/np.mean(dT_unif[5])
+c_hcap = aa5_v - aa5_u
+
+print(f"\n{'='*55}")
+print(f"Full equilibrium AA = {full_aa:.2f}")
+print(f"  Planck T³:        {c_planck:+.3f}")
+print(f"  Albedo feedback:  {c_albedo:+.3f}")
+print(f"  Moisture (C-C):   {c_moist:+.3f}")
+print(f"  Interaction:      {resid:+.3f}")
+print(f"  Heat cap (yr 5):  {c_hcap:+.3f}")
+
+# ============================================================
+# PLOTTING
+# ============================================================
+fig = plt.figure(figsize=(18, 16))
+gs = GridSpec(3, 2, hspace=0.36, wspace=0.28,
+              left=0.07, right=0.95, top=0.92, bottom=0.04)
+
+plt.rcParams.update({
+    'font.size': 11.5, 'axes.titlesize': 13.5,
+    'axes.grid': True, 'grid.alpha': 0.2,
+    'figure.facecolor': 'white',
+})
+
+# ---- (a) ΔT profiles ----
+ax1 = fig.add_subplot(gs[0, 0])
+order = ['full', 'no_planck', 'no_albedo', 'no_moist']
+for k in order:
+    c = configs[k]
+    lw = 3.5 if k=='full' else 2.0
+    ls = '-' if k=='full' else '--'
+    ax1.plot(lat, eq_results[k]['dT'], color=c['col'], lw=lw, ls=ls,
+             label=c['lbl'].replace('\n', ' '))
+
+ax1.axvspan(65, 90, alpha=0.06, color='steelblue')
+ax1.set_xlabel('Latitude (°N)')
+ax1.set_ylabel('Equilibrium ΔT (°C)')
+ax1.set_title('(a) Equilibrium Response to 4×CO₂', fontweight='bold')
+ax1.legend(fontsize=7.5, loc='upper left')
+ax1.set_xlim(0, 90)
+
+# ---- (b) AA ratio bars ----
+ax2 = fig.add_subplot(gs[0, 1])
+bk = ['full', 'no_planck', 'no_albedo', 'no_moist']
+bl = ['Full\nModel', 'No Planck\nnonlinearity', 'No albedo\nfeedback', 'No moisture\ntransport']
+bc = [configs[k]['col'] for k in bk]
+bv = [eq_results[k]['aa'] for k in bk]
+
+bars = ax2.bar(range(4), bv, color=bc, width=0.55, edgecolor='white', lw=1.5)
+ax2.axhline(1.0, color='gray', ls=':', lw=1, label='No amplification')
+ax2.set_xticks(range(4))
+ax2.set_xticklabels(bl, fontsize=9.5)
+ax2.set_ylabel('AA Ratio (Arctic / Global)')
+ax2.set_title('(b) Equilibrium AA Ratio', fontweight='bold')
+for b, v in zip(bars, bv):
+    ax2.text(b.get_x()+b.get_width()/2, max(v, 0)+0.03,
+             f'{v:.2f}', ha='center', fontweight='bold', fontsize=12)
+ax2.set_ylim(0, max(max(bv)*1.2, 2.0))
+ax2.legend(fontsize=9)
+
+# ---- (c) Decomposition ----
+ax3 = fig.add_subplot(gs[1, 0])
+dn = ['Planck nonlinearity\n(Stefan-Boltzmann T³)',
+      'Albedo feedback\n(ice-albedo, linearized)',
+      'Moisture transport\n(Clausius-Clapeyron)',
+      'Heat capacity diff.\n(sea ice insulation, yr 5)',
+      'Interaction\n(nonlinear residual)']
+dv = [c_planck, c_albedo, c_moist, c_hcap, resid]
+dc = ['#1565C0', '#6A1B9A', '#E65100', '#2E7D32', '#757575']
+
+bars3 = ax3.barh(range(len(dn)), dv, color=dc, height=0.55, edgecolor='white', lw=1.5)
+ax3.axvline(0, color='black', lw=0.8)
+ax3.set_yticks(range(len(dn)))
+ax3.set_yticklabels(dn, fontsize=9.5)
+ax3.set_xlabel('Contribution to AA ratio')
+ax3.set_title('(c) Mechanism Decomposition', fontweight='bold')
+
+for b, v in zip(bars3, dv):
+    xp = v + 0.01 if v >= 0 else v - 0.01
+    ha = 'left' if v >= 0 else 'right'
+    ax3.text(xp, b.get_y()+b.get_height()/2, f'{v:+.3f}',
+             ha=ha, va='center', fontweight='bold', fontsize=10.5)
+
+# ---- (d) Transient ----
+ax4 = fig.add_subplot(gs[1, 1])
+yrs = np.arange(81)
+aa_v, aa_u = [], []
+for yr in range(81):
+    gv = np.mean(dT_vary[yr]); av = np.mean(dT_vary[yr][arctic])
+    gu = np.mean(dT_unif[yr]); au = np.mean(dT_unif[yr][arctic])
+    aa_v.append(av/gv if gv>0.1 else np.nan)
+    aa_u.append(au/gu if gu>0.1 else np.nan)
+
+ax4.plot(yrs, aa_v, '#C62828', lw=3, label=f'Varying C (realistic)')
+ax4.plot(yrs, aa_u, '#2E7D32', lw=2.5, ls='--', label='Uniform C (no heat cap. diff.)')
+ax4.axhline(full_aa, color='gray', ls=':', lw=1, alpha=0.5, label=f'Equilibrium AA = {full_aa:.2f}')
+ax4.axhline(1.0, color='gray', ls=':', lw=0.5)
+
+valid_v = np.array(aa_v); valid_u = np.array(aa_u)
+mask = ~np.isnan(valid_v) & ~np.isnan(valid_u)
+ax4.fill_between(yrs[mask], valid_u[mask], valid_v[mask],
+                 alpha=0.15, color='#2E7D32', label='Heat capacity effect')
+
+ax4.annotate(f'Year 5 gap = {c_hcap:.2f}', xy=(5, (aa5_v+aa5_u)/2),
+             xytext=(20, (aa5_v+aa5_u)/2+0.3),
+             fontsize=9.5, fontweight='bold', color='#2E7D32',
+             arrowprops=dict(arrowstyle='->', color='#2E7D32', lw=1.5))
+
+ax4.set_xlabel('Years after 4×CO₂')
+ax4.set_ylabel('AA Ratio')
+ax4.set_title('(d) Transient AA: Heat Capacity Effect', fontweight='bold')
+ax4.legend(fontsize=8, loc='best')
+ax4.set_xlim(0, 80)
+
+# ---- (e) Parameter profiles ----
+ax5 = fig.add_subplot(gs[2, 0])
+ax5b = ax5.twinx()
+ax5c = ax5.twinx()
+ax5c.spines['right'].set_position(('axes', 1.18))
+
+# B_eff
+B_full_eff = B_planck - lambda_albedo
+l1, = ax5.plot(lat, B_planck, '#C62828', lw=2, ls='--', alpha=0.6, label='B_Planck(φ)')
+l1b, = ax5.plot(lat, B_full_eff, '#C62828', lw=2.5, label='B_eff = B_Planck − λ_albedo')
+ax5.fill_between(lat, B_full_eff, B_planck, alpha=0.15, color='#6A1B9A', label='Albedo feedback λ_albedo')
+ax5.axhline(B_mean, color='gray', ls=':', alpha=0.4)
+
+# D_moist/D_dry
+l2, = ax5b.plot(lat, D_moist/D0, '#E65100', lw=2.5, label='Moist/Dry diffusivity')
+ax5b.axhline(1.0, color='#E65100', ls=':', alpha=0.4)
+
+# Heat capacity
+l3, = ax5c.plot(lat, h_ml, '#2E7D32', lw=2.5, label='Eff. mixed layer (m)')
+ax5c.axhline(50, color='#2E7D32', ls=':', alpha=0.4)
+
+ax5.set_xlabel('Latitude (°N)')
+ax5.set_ylabel('B_eff (W/m²/°C)', color='#C62828')
+ax5b.set_ylabel('D_moist / D_dry', color='#E65100')
+ax5c.set_ylabel('Mixed layer (m)', color='#2E7D32')
+ax5.set_title('(e) Latitude-Dependent Parameters', fontweight='bold')
+ax5.set_xlim(0, 90)
+ax5.legend([l1, l1b, l2, l3], 
+           ['B_Planck(φ)', 'B_eff = B_Planck − λ_albedo', 'Moist/Dry diffusivity', 'Eff. mixed layer'],
+           fontsize=7.5, loc='center left')
+
+# ---- (f) Summary ----
+ax6 = fig.add_subplot(gs[2, 1])
+ax6.axis('off')
+
+aa_minus_1 = full_aa - 1.0
+def pct(v): return f'{v/aa_minus_1*100:+.0f}%' if abs(aa_minus_1)>0.01 else 'N/A'
+
+# Build visual bars
+def make_bar(v, scale=30):
+    n = int(abs(v)*scale)
+    return '█'*max(1, n) if v >= 0 else '░'*max(1, n)
+
+txt = (
+    f"┌───────────────────────────────────────────┐\n"
+    f"│ 1D Diffusive EBM + Linearized Feedbacks   │\n"
+    f"│ Forcing: 4×CO₂ = {F4x} W/m²               │\n"
+    f"├───────────────────────────────────────────┤\n"
+    f"│ EQUILIBRIUM                               │\n"
+    f"│   Arctic (65-90°N): {eq_results['full']['arctic']:.2f}°C              │\n"
+    f"│   Tropics (0-30°N): {eq_results['full']['tropic']:.2f}°C              │\n"
+    f"│   Global mean:      {eq_results['full']['global']:.2f}°C              │\n"
+    f"│   AA ratio:         {full_aa:.2f}                  │\n"
+    f"├───────────────────────────────────────────┤\n"
+    f"│ DECOMPOSITION (AA − 1 = {aa_minus_1:.2f})            │\n"
+    f"│                                           │\n"
+    f"│ Planck T³   {make_bar(c_planck):12s} {c_planck:+.3f} ({pct(c_planck)})│\n"
+    f"│ Albedo fb   {make_bar(c_albedo):12s} {c_albedo:+.3f} ({pct(c_albedo)})│\n"
+    f"│ Moisture    {make_bar(c_moist):12s} {c_moist:+.3f} ({pct(c_moist)}) │\n"
+    f"│ Heat cap*   {make_bar(c_hcap):12s} {c_hcap:+.3f}          │\n"
+    f"│ Residual    {make_bar(resid):12s} {resid:+.3f} ({pct(resid)})│\n"
+    f"│ * transient effect at year 5              │\n"
+    f"├───────────────────────────────────────────┤\n"
+    f"│ ★ KEY INSIGHTS                            │\n"
+    f"│ • Planck T³ = 가장 근본적 메커니즘        │\n"
+    f"│   (이것 없으면 AA < 1.0 가능!)             │\n"
+    f"│ • 알베도 되먹임이 큰 증폭기 역할          │\n"
+    f"│ • 열용량 차이는 과도기에서만 작용          │\n"
+    f"│ • 실제 AA(2~4) > 모델({full_aa:.1f})               │\n"
+    f"│   → 누락: lapse rate fb, cloud fb,        │\n"
+    f"│     WV greenhouse, ocean dynamics          │\n"
+    f"│ • 기여의 합 ≠ 전체 (비가산성)             │\n"
+    f"└───────────────────────────────────────────┘"
+)
+
+ax6.text(0.0, 0.97, txt, transform=ax6.transAxes,
+         fontsize=9.5, va='top', fontfamily='monospace',
+         bbox=dict(boxstyle='round,pad=0.5', fc='#FAFAFA', ec='#BDBDBD'))
+ax6.set_title('(f) Summary', fontweight='bold')
+
+fig.suptitle('Arctic Amplification: Decomposing Fundamental Physical Principles\n1D Diffusive Energy Balance Model',
+             fontsize=15, fontweight='bold', y=0.97)
+
+plt.savefig('/home/claude/aa_decomposition.png', dpi=180, bbox_inches='tight')
+print("\nFigure saved!")
+plt.close()
